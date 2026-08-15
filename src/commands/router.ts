@@ -2,9 +2,14 @@ import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
 import { handleHelp, handleClear, handleCwd, handleModel, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSend, handleUnknown } from './handlers.js';
+import type { InstanceConfig } from '../instances.js';
+import type { GitApprovalStore } from '../governance/approval-store.js';
+import { handleApprove, handleRecover, handleReject, handleRequest, handleRequests } from '../governance/commands.js';
 
 export interface CommandContext {
   accountId: string;
+  instance: InstanceConfig;
+  approvalStore: GitApprovalStore;
   session: Session;
   updateSession: (partial: Partial<Session>) => void;
   clearSession: () => Session;
@@ -17,6 +22,9 @@ export interface CommandResult {
   handled: boolean;
   claudePrompt?: string;
   sendFile?: string; // Absolute path to a file to send to the user
+  cwdOverride?: string;
+  approvalRequestId?: string;
+  queryPermission?: 'admin' | 'read-only';
 }
 
 /**
@@ -68,6 +76,16 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handleCompact(ctx);
     case 'send':
       return handleSend(ctx, args);
+    case 'request':
+      return handleRequest(ctx, args);
+    case 'requests':
+      return handleRequests(ctx, args);
+    case 'approve':
+      return handleApprove(ctx, args);
+    case 'reject':
+      return handleReject(ctx, args);
+    case 'recover':
+      return handleRecover(ctx, args);
     case 'version':
     case 'v':
       return handleVersion();

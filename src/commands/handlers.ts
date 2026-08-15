@@ -25,7 +25,14 @@ const HELP_TEXT = `可用命令：
 配置：
   /cwd [路径]       查看或切换工作目录
   /model [名称]     查看或切换 Claude 模型
-  /prompt [内容]    查看或设置系统提示词（全局生效）
+  /prompt [内容]    查看或设置系统提示词（当前实例）
+
+Git 审批：
+  /request <需求>   提交修改请求
+  /requests [all]   查看请求（仅管理员）
+  /approve <请求号> 批准并执行（仅管理员）
+  /reject <请求号>  拒绝请求（仅管理员）
+  /recover <请求号> 收口中断审批（仅管理员）
 
 其他：
   /skills [full]    列出已安装的 skill（full 显示描述）
@@ -84,6 +91,8 @@ export function handleStatus(ctx: CommandContext): CommandResult {
   const lines = [
     '📊 会话状态',
     '',
+    `实例: ${ctx.instance.id}`,
+    `角色: ${ctx.instance.role}`,
     `工作目录: ${s.workingDirectory}`,
     `模型: ${s.model ?? '默认'}`,
     `会话ID: ${s.sdkSessionId ?? '无'}`,

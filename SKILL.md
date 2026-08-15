@@ -10,7 +10,7 @@ description: 微信消息桥接 - 在微信中与 Claude Code 聊天。支持文
 ## 前置条件
 
 - Node.js >= 18
-- macOS（daemon 使用 launchd 管理）
+- Windows、macOS 或 Linux
 - 个人微信账号（需扫码绑定）
 - 已安装 Claude Code（`@anthropic-ai/claude-agent-sdk`）
 
@@ -65,7 +65,7 @@ cd ~/.claude/skills/wechat-claude-code && test -d node_modules && echo "deps_ok"
 ### 第 2 步：检查是否已绑定微信账号
 
 ```bash
-ls ~/.wechat-claude-code/accounts/*.json 2>/dev/null | head -1
+find ~/.wechat-claude-code -path '*/accounts/*.json' -type f 2>/dev/null | head -1
 ```
 
 - 如果没有账号文件：提示用户需要先执行 setup 扫码绑定，询问是否现在执行。
@@ -76,6 +76,8 @@ ls ~/.wechat-claude-code/accounts/*.json 2>/dev/null | head -1
 ```bash
 cd ~/.claude/skills/wechat-claude-code && npm run daemon -- status
 ```
+
+如果用户指定了命名实例，使用 `npm run daemon -- status --instance <实例名>`；Windows 使用 `npm run daemon:windows -- status -Instance <实例名>`。
 
 ### 第 4 步：根据状态展示信息
 
@@ -125,15 +127,35 @@ cd ~/.claude/skills/wechat-claude-code && npm run daemon -- status
 | status | `npm run daemon -- status` | 查看运行状态 |
 | logs | `npm run daemon -- logs` | 查看最近日志（tail -100） |
 
+Windows 使用 `npm run daemon:windows -- <命令> -Instance <实例名>`。
+
+## 多实例与审批
+
+创建一个管理员实例和任意数量的普通实例：
+
+```bash
+npm run setup -- --instance admin --role admin
+npm run setup -- --instance worker-a --role requester
+```
+
+管理命名实例时始终传入实例名：
+
+```bash
+npm run daemon -- start --instance admin
+npm run daemon -- status --instance worker-a
+```
+
+普通实例只能只读访问 Claude，并使用 `/request <需求>` 提交 Git 修改请求。唯一管理员实例使用 `/requests`、`/approve <请求号>`、`/reject <请求号>` 审批；中断的执行使用 `/recover <请求号>` 收口。目标仓库必须是干净的 Git 工作树。
+
 ## 数据目录
 
 所有数据存储在 `~/.wechat-claude-code/`：
 
 ```
 ~/.wechat-claude-code/
-├── accounts/       # 绑定的微信账号数据（每个账号一个 JSON）
-├── config.env      # 全局配置（工作目录、模型、系统提示词）
-├── sessions/       # 会话数据（每个账号一个 JSON）
-├── get_updates_buf # 消息轮询同步缓冲
-└── logs/           # 运行日志（每日轮转，保留 30 天）
+├── accounts/                    # default 实例（向后兼容）
+├── instances/<实例名>/          # 实例隔离数据
+├── approval-ledger/.git/        # Git 审批账本
+├── approval-ledger/requests/    # 修改请求
+└── approval-worktrees/          # 审批用临时 worktree
 ```

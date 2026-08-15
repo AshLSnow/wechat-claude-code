@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleStreamLine, type StreamParserState } from '../claude/provider.js';
+import { buildClaudeArgs, handleStreamLine, type StreamParserState } from '../claude/provider.js';
 
 function freshState(): StreamParserState {
   return { sessionId: '', textParts: [], trackingSkill: false, skillInputAccum: '' };
@@ -102,4 +102,24 @@ test('handleStreamLine: tool_use stop_reason 也正常透传', () => {
     { onTurnEnd: (r) => calls.push(r) },
   );
   assert.deepEqual(calls, ['tool_use']);
+});
+
+test('buildClaudeArgs: admin instance keeps full permission mode', () => {
+  const args = buildClaudeArgs({ permission: 'admin' });
+  assert.ok(args.includes('--dangerously-skip-permissions'));
+  assert.ok(!args.includes('--safe-mode'));
+});
+
+test('buildClaudeArgs: requester instance is restricted to read tools and plan mode', () => {
+  const args = buildClaudeArgs({ permission: 'read-only' });
+  assert.ok(!args.includes('--dangerously-skip-permissions'));
+  assert.ok(args.includes('--safe-mode'));
+  assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), [
+    '--permission-mode',
+    'plan',
+  ]);
+  assert.deepEqual(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2), [
+    '--tools',
+    'Read,Grep,Glob',
+  ]);
 });

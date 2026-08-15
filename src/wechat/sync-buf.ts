@@ -11,3 +11,7 @@ export function loadSyncBuf(): string {
 export function saveSyncBuf(buf: string): void {
   saveJson(SYNC_BUF_PATH, buf);
 }
+
+export function clearSyncBuf(): void {
+  saveJson(SYNC_BUF_PATH, '');
+}

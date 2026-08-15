@@ -6,7 +6,7 @@ import { unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { WeChatApi } from './wechat/api.js';
-import { saveAccount, loadLatestAccount, type AccountData } from './wechat/accounts.js';
+import { loadAccount, loadLatestAccount, type AccountData } from './wechat/accounts.js';
 import { startQrLogin, waitForQrScan } from './wechat/login.js';
 import { createMonitor, type MonitorCallbacks } from './wechat/monitor.js';
 import { createSender } from './wechat/send.js';
@@ -19,6 +19,11 @@ import { filterToolNoise } from './claude/tool-noise-filter.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
 import { DATA_DIR } from './constants.js';
+import { BASE_DATA_DIR } from './constants.js';
+import { RUNTIME_OPTIONS } from './runtime.js';
+import { hasAdminInstance, isCurrentInstanceConfigured, listInstances, loadCurrentInstance, saveCurrentInstance, type InstanceConfig } from './instances.js';
+import { GitApprovalStore, type AdminAuditContext } from './governance/approval-store.js';
+import { clearSyncBuf } from './wechat/sync-buf.js';
 import { MessageType, type WeixinMessage } from './wechat/types.js';
 import { loadPendingQueue, savePendingQueue, type PendingItem } from './pending-queue.js';
 
@@ -172,10 +177,19 @@ function openFile(filePath: string): void {
 async function runSetup(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true });
   const QR_PATH = join(DATA_DIR, 'qrcode.png');
+  const currentInstance = loadCurrentInstance();
+  const role = RUNTIME_OPTIONS.role
+    ?? (isCurrentInstanceConfigured()
+      ? currentInstance.role
+      : (hasAdminInstance(RUNTIME_OPTIONS.instanceId) ? 'requester' : 'admin'));
+  if (role === 'admin' && hasAdminInstance(RUNTIME_OPTIONS.instanceId)) {
+    throw new Error('另一个管理员实例已经存在；每个安装只能配置一个管理员实例');
+  }
 
   console.log('正在设置...\n');
 
   // Loop: generate QR → display → poll for scan → handle expiry → repeat
+  let boundAccount: AccountData | undefined;
   while (true) {
     const { qrcodeUrl, qrcodeId } = await startQrLogin();
 
@@ -211,7 +225,7 @@ async function runSetup(): Promise<void> {
     console.log('等待扫码绑定...');
 
     try {
-      await waitForQrScan(qrcodeId);
+      boundAccount = await waitForQrScan(qrcodeId);
       console.log('✅ 绑定成功!');
       break;
     } catch (err: any) {
@@ -233,7 +247,14 @@ async function runSetup(): Promise<void> {
   config.workingDirectory = workingDir;
   saveConfig(config);
 
-  console.log('运行 npm run daemon -- start 启动服务');
+  const instance = saveCurrentInstance({ role, accountId: boundAccount!.accountId });
+  clearSyncBuf();
+
+  console.log(`实例 ${instance.id} 已配置为 ${instance.role}`);
+  const daemonCommand = process.platform === 'win32'
+    ? `npm run daemon:windows -- start -Instance ${instance.id}`
+    : `npm run daemon -- start --instance ${instance.id}`;
+  console.log(`运行 ${daemonCommand} 启动服务`);
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +263,8 @@ async function runSetup(): Promise<void> {
 
 async function runDaemon(): Promise<void> {
   const config = loadConfig();
-  const account = loadLatestAccount();
+  const instance = loadCurrentInstance();
+  const account = (instance.accountId ? loadAccount(instance.accountId) : null) ?? loadLatestAccount();
 
   if (!account) {
     console.error('未找到账号，请先运行 node dist/main.js setup');
@@ -250,6 +272,7 @@ async function runDaemon(): Promise<void> {
   }
 
   const api = new WeChatApi(account.botToken, account.baseUrl);
+  const approvalStore = new GitApprovalStore(BASE_DATA_DIR);
   const sessionStore = createSessionStore();
   const session: Session = sessionStore.load(account.accountId);
 
@@ -279,7 +302,10 @@ async function runDaemon(): Promise<void> {
     processingQueue = true;
     while (messageQueue.length > 0) {
       const msg = messageQueue.shift()!;
-      await handleMessage(msg, account!, session, sessionStore, sender, config, sharedCtx, activeControllers, messageQueue);
+      await handleMessage(
+        msg, account!, instance, approvalStore, session, sessionStore, sender,
+        config, sharedCtx, activeControllers, messageQueue,
+      );
     }
     processingQueue = false;
   }
@@ -330,8 +356,8 @@ async function runDaemon(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  logger.info('Daemon started', { accountId: account.accountId });
-  console.log(`已启动 (账号: ${account.accountId})`);
+  logger.info('Daemon started', { accountId: account.accountId, instanceId: instance.id, role: instance.role });
+  console.log(`已启动 (实例: ${instance.id}, 角色: ${instance.role}, 账号: ${account.accountId})`);
 
   await monitor.run();
 }
@@ -343,6 +369,8 @@ async function runDaemon(): Promise<void> {
 async function handleMessage(
   msg: WeixinMessage,
   account: AccountData,
+  instance: InstanceConfig,
+  approvalStore: GitApprovalStore,
   session: Session,
   sessionStore: ReturnType<typeof createSessionStore>,
   sender: ReturnType<typeof createSender>,
@@ -384,6 +412,8 @@ async function handleMessage(
 
     const ctx: CommandContext = {
       accountId: account.accountId,
+      instance,
+      approvalStore,
       session,
       updateSession,
       clearSession: () => sessionStore.clear(account.accountId),
@@ -402,6 +432,13 @@ async function handleMessage(
       await sendToClaude(
         result.claudePrompt, imageItem, fileItem, fromUserId, contextToken,
         account, session, sessionStore, sender, config, activeControllers,
+        approvalStore,
+        {
+          instanceId: instance.id,
+          cwdOverride: result.cwdOverride,
+          approvalRequestId: result.approvalRequestId,
+          queryPermission: result.queryPermission ?? (instance.role === 'admin' ? 'admin' : 'read-only'),
+        },
       );
       return;
     }
@@ -426,7 +463,16 @@ async function handleMessage(
   await sendToClaude(
     userText, imageItem, fileItem, fromUserId, contextToken,
     account, session, sessionStore, sender, config, activeControllers,
+    approvalStore,
+    { instanceId: instance.id, queryPermission: instance.role === 'admin' ? 'admin' : 'read-only' },
   );
+}
+
+interface ExecutionOptions {
+  instanceId: string;
+  cwdOverride?: string;
+  approvalRequestId?: string;
+  queryPermission: 'admin' | 'read-only';
 }
 
 function extractTextFromItems(items: NonNullable<WeixinMessage['item_list']>): string {
@@ -490,6 +536,8 @@ async function sendToClaude(
   sender: ReturnType<typeof createSender>,
   config: ReturnType<typeof loadConfig>,
   activeControllers: Map<string, AbortController>,
+  approvalStore: GitApprovalStore,
+  execution: ExecutionOptions,
 ): Promise<void> {
   // Set state to processing
   session.state = 'processing';
@@ -501,14 +549,15 @@ async function sendToClaude(
 
   // Flush timer for streaming text to WeChat during query (declared here for finally cleanup)
   let flushTimer: ReturnType<typeof setInterval> | undefined;
-
-  // Record user message in chat history
-  sessionStore.addChatMessage(session, 'user', userText || '(图片)');
-
-  // Start typing indicator (keepalive until stopTyping is called)
-  const stopTyping = sender.startTyping(fromUserId, contextToken);
+  let stopTyping: () => void = () => {};
+  let approvalFinalized = false;
+  let adminAudit: AdminAuditContext | undefined;
+  let adminAuditFinalized = false;
 
   try {
+    // Record user message in chat history and start the typing keepalive.
+    sessionStore.addChatMessage(session, 'user', userText || '(图片)');
+    stopTyping = sender.startTyping(fromUserId, contextToken);
     // Download image if present
     let images: QueryOptions['images'];
     if (imageItem) {
@@ -609,17 +658,32 @@ async function sendToClaude(
       }
     }, 2000);
 
+    const effectiveCwd = (execution.cwdOverride ?? session.workingDirectory ?? config.workingDirectory).replace(/^~/, homedir());
+    let effectivePermission = execution.queryPermission;
+    let auditMessage = '';
+    if (effectivePermission === 'admin' && !execution.approvalRequestId) {
+      try {
+        adminAudit = approvalStore.prepareAdminAudit(effectiveCwd, execution.instanceId, prompt);
+      } catch (error) {
+        effectivePermission = 'read-only';
+        auditMessage = `管理员写权限已降级为只读: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     const queryOptions: QueryOptions = {
       prompt,
-      cwd: (session.workingDirectory || config.workingDirectory).replace(/^~/, homedir()),
-      resume: session.sdkSessionId,
+      cwd: effectiveCwd,
+      resume: execution.approvalRequestId ? undefined : session.sdkSessionId,
       model: session.model,
       systemPrompt: [
         '你正在通过微信与用户对话，不是在终端里。不要让用户去终端操作。如果用户需要文件，直接输出文件地址就行，会自动识别解析推送文件到用户的微信中。',
         config.systemPrompt,
+        effectivePermission === 'read-only'
+          ? 'You are a read-only requester instance. Inspect and explain, but never modify files, run commands, or claim that changes were applied. Tell the user to submit modifications with /request.'
+          : '',
       ].filter(Boolean).join('\n'),
       abortController,
       images,
+      permission: effectivePermission,
       onText: (delta: string) => {
         router.onText(delta);
       },
@@ -638,6 +702,36 @@ async function sendToClaude(
       sessionStore.save(account.accountId, session);
       const retryResult = await claudeQuery(queryOptions);
       Object.assign(result, retryResult);
+    }
+
+    let approvalMessage = '';
+    if (execution.approvalRequestId) {
+      try {
+        const finalized = approvalStore.finalizeApproval(execution.approvalRequestId, result.error);
+        approvalMessage = finalized.message;
+        approvalFinalized = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        approvalMessage = `Git approval finalization failed: ${message}`;
+        result.error = result.error ? `${result.error}; ${message}` : message;
+      }
+      if (approvalMessage) {
+        result.text = result.text ? `${result.text}\n\nGit 审批结果: ${approvalMessage}` : `Git 审批结果: ${approvalMessage}`;
+      }
+    }
+    if (adminAudit) {
+      try {
+        const audited = approvalStore.finalizeAdminAudit(adminAudit, result.error);
+        if (audited.message) auditMessage = audited.message;
+        adminAuditFinalized = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        auditMessage = `管理员 Git 审计失败: ${message}`;
+        result.error = result.error ? `${result.error}; ${message}` : message;
+      }
+    }
+    if (auditMessage) {
+      result.text = result.text ? `${result.text}\n\nGit 审计: ${auditMessage}` : `Git 审计: ${auditMessage}`;
     }
 
     // Stop periodic flush, drain router (final 先于 interstitial), wait for queued sends
@@ -703,6 +797,14 @@ async function sendToClaude(
       pendingRetry = null;
     }
 
+    // Claude 的流式文本已经发送时，追加的 Git 审批结果不会经过 router，需单独推送。
+    if (approvalMessage && anySent) {
+      await sender.sendText(fromUserId, contextToken, `Git 审批结果: ${approvalMessage}`);
+    }
+    if (auditMessage && anySent) {
+      await sender.sendText(fromUserId, contextToken, `Git 审计: ${auditMessage}`);
+    }
+
     // Send result back to WeChat
     if (result.text) {
       if (result.error) {
@@ -724,13 +826,15 @@ async function sendToClaude(
     }
 
     // Update session with new SDK session ID
-    session.sdkSessionId = result.sessionId || undefined;
+    if (!execution.approvalRequestId) {
+      session.sdkSessionId = result.sessionId || undefined;
+    }
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
 
     // Auto-push deliverable files mentioned in Claude's response
     if (result.text) {
-      const cwd = (session.workingDirectory || config.workingDirectory).replace(/^~/, homedir());
+      const cwd = effectiveCwd;
       const detectedPaths = extractFilePathsFromText(result.text, cwd);
       const { existsSync } = await import('node:fs');
       const { extname } = await import('node:path');
@@ -773,12 +877,34 @@ async function sendToClaude(
       }
     }
   } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    if (execution.approvalRequestId && !approvalFinalized) {
+      try {
+        const finalized = approvalStore.finalizeApproval(execution.approvalRequestId, errorMsg);
+        approvalFinalized = true;
+        await sender.sendText(fromUserId, contextToken, `Git 审批结果: ${finalized.message}`).catch(() => {});
+      } catch (finalizeError) {
+        logger.error('Failed to finalize approval after exception', {
+          requestId: execution.approvalRequestId,
+          error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        });
+      }
+    }
+    if (adminAudit && !adminAuditFinalized) {
+      try {
+        approvalStore.finalizeAdminAudit(adminAudit, errorMsg);
+        adminAuditFinalized = true;
+      } catch (auditError) {
+        logger.error('Failed to finalize admin Git audit after exception', {
+          error: auditError instanceof Error ? auditError.message : String(auditError),
+        });
+      }
+    }
     const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort'));
     if (isAbort) {
       // Query was cancelled by a new incoming message — exit silently
       logger.info('Claude query aborted by new message');
     } else {
-      const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error('Error in sendToClaude', { error: errorMsg });
       await sender.sendText(fromUserId, contextToken, '处理消息时出错，请稍后重试。');
     }
@@ -798,9 +924,18 @@ async function sendToClaude(
 // CLI
 // ---------------------------------------------------------------------------
 
-const command = process.argv[2];
+const command = RUNTIME_OPTIONS.command;
 
-if (command === 'setup') {
+if (command === 'instances') {
+  const instances = listInstances();
+  if (instances.length === 0) {
+    console.log('尚未配置实例。');
+  } else {
+    for (const instance of instances) {
+      console.log(`${instance.id}\t${instance.role}\t${instance.accountId ?? '未绑定'}`);
+    }
+  }
+} else if (command === 'setup') {
   runSetup().catch((err) => {
     logger.error('Setup failed', { error: err instanceof Error ? err.message : String(err) });
     console.error('设置失败:', err);

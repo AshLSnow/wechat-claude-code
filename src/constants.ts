@@ -1,7 +1,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { BASE_DATA_DIR, INSTANCE_DATA_DIR } from './runtime.js';
 
-export const DATA_DIR = process.env.WCC_DATA_DIR || join(homedir(), '.wechat-claude-code');
+export { BASE_DATA_DIR };
+export const DATA_DIR = INSTANCE_DATA_DIR;
 
 export const DEFAULT_WORKING_DIR = join(homedir(), 'Documents', 'ClaudeCode');
 

@@ -27,6 +27,7 @@ export interface QueryOptions {
   onTurnEnd?: (stopReason: string) => Promise<void> | void;
   /** Optional abort controller to cancel the query (e.g. when user sends a new message). */
   abortController?: AbortController;
+  permission?: 'admin' | 'read-only';
 }
 
 export interface QueryResult {
@@ -162,6 +163,30 @@ export function handleStreamLine(
 // Core function
 // ---------------------------------------------------------------------------
 
+export function buildClaudeArgs(options: Pick<QueryOptions, 'resume' | 'model' | 'systemPrompt' | 'permission'>): string[] {
+  const args: string[] = [
+    '-p', '-',
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--include-partial-messages',
+  ];
+
+  if ((options.permission ?? 'admin') === 'admin') {
+    args.push('--dangerously-skip-permissions');
+  } else {
+    args.push(
+      '--safe-mode',
+      '--permission-mode', 'plan',
+      '--tools', 'Read,Grep,Glob',
+    );
+  }
+
+  if (options.resume) args.push('--resume', options.resume);
+  if (options.model) args.push('--model', options.model);
+  if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt);
+  return args;
+}
+
 export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
   const {
     prompt,
@@ -173,6 +198,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     onText,
     onTurnEnd,
     abortController,
+    permission = 'admin',
   } = options;
 
   logger.info("Starting Claude CLI query", {
@@ -183,17 +209,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
   });
 
   // Build CLI arguments
-  const args: string[] = [
-    '-p', '-',
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--include-partial-messages',
-    '--dangerously-skip-permissions',
-  ];
-
-  if (resume) args.push('--resume', resume);
-  if (model) args.push('--model', model);
-  if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+  const args = buildClaudeArgs({ resume, model, systemPrompt, permission });
 
   // Handle images: save to temp files and append paths to prompt
   const tempImagePaths = images?.length ? saveImageTemp(images) : [];

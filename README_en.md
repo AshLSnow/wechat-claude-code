@@ -24,6 +24,7 @@ Scan a QR code to bind your WeChat, and a new "friend" appears in your contacts.
 | **Consistent experience** | Mobile and desktop Claude Code behave identically — same orchestration, same output. Not two disconnected AIs. |
 | **Two-way files** | Send images, Word docs, PDFs for Claude to analyze. Files Claude generates get pushed directly to WeChat — no need to go back to your computer. |
 | **Timeout reassurance** | Task taking longer than 5 minutes? You'll get an automatic message letting you know it's still working. |
+| **Multi-instance Git approval** | Bind several WeChat accounts to one installation. Requesters stay read-only; one admin approves all changes. |
 
 ---
 
@@ -76,6 +77,51 @@ npm run daemon -- restart  # Restart (after code updates)
 npm run daemon -- logs     # View recent logs
 ```
 
+Native Windows background management uses PowerShell:
+
+```powershell
+npm run daemon:windows -- start -Instance default
+npm run daemon:windows -- status -Instance default
+```
+
+## Multiple WeChat Accounts and Git Approval
+
+Each named instance has isolated credentials, config, sessions, sync cursor, and logs. One source installation can run all instances.
+Instance names must start with a letter or digit, may contain letters, digits, dots, underscores, and hyphens, and are limited to 64 characters.
+
+```bash
+npm run setup -- --instance admin --role admin
+npm run setup -- --instance writer-a --role requester
+npm run setup -- --instance writer-b --role requester
+
+# macOS / Linux
+npm run daemon -- start --instance admin
+npm run daemon -- start --instance writer-a
+npm run daemon -- start --instance writer-b
+```
+
+On Windows:
+
+```powershell
+npm run daemon:windows -- start -Instance admin
+npm run daemon:windows -- start -Instance writer-a
+npm run daemon:windows -- start -Instance writer-b
+```
+
+List configured instances with `npm run instances`.
+
+Governance rules:
+
+- Only one `admin` instance may be configured.
+- A `requester` Claude process runs in `plan` mode with only `Read,Grep,Glob`; write tools, shell, hooks, MCP servers, and plugins are disabled.
+- `/request <change>` commits a request to the local Git approval ledger.
+- The admin uses `/requests`, `/approve <id>`, and `/reject <id>`.
+- If an approval is interrupted by a restart or crash, `/recover <id>` commits the remaining work to its proposal branch and closes it as failed.
+- Approval creates an isolated `wcc/request/<id>` branch and worktree. Changes are committed automatically and fast-forwarded only if the target branch has not moved.
+- Direct admin changes are also committed automatically. A non-Git or dirty workspace is downgraded to read-only.
+
+> This is an application-level boundary. For protection against a malicious process running as the same OS user, add separate Windows users, containers, or VM isolation.
+
 ---
 
 ## WeChat Commands
@@ -96,6 +142,11 @@ Send these directly in the WeChat chat:
 | `/compact` | Compact context, start a new CLI session |
 | `/reset` | Full reset including working directory |
 | `/undo [n]` | Remove last N messages from history |
+| `/request <change>` | Submit a Git change request |
+| `/requests [all]` | List requests (admin only) |
+| `/approve <id>` | Approve, execute, and commit (admin only) |
+| `/reject <id> [reason]` | Reject a request (admin only) |
+| `/recover <id>` | Save and close an interrupted approval (admin only) |
 | `/<skill> [args]` | Trigger any installed Skill |
 
 ---
@@ -121,7 +172,7 @@ The daemon long-polls WeChat for new messages, forwards them to the local `claud
 ## Prerequisites
 
 - Node.js >= 18
-- macOS or Linux
+- Windows, macOS, or Linux (use `daemon:windows` on Windows)
 - A personal WeChat account
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated
 
@@ -133,10 +184,11 @@ All data is stored in `~/.wechat-claude-code/`:
 
 ```
 ~/.wechat-claude-code/
-├── accounts/       # WeChat account credentials
-├── config.json     # Global config
-├── sessions/       # Session data
-└── logs/           # Rotating logs (daily, 30-day retention)
+├── accounts/                    # Legacy default-instance credentials
+├── instances/<instance>/        # Isolated credentials, config, sessions, cursor, and logs
+├── approval-ledger/.git/        # Git approval ledger
+├── approval-ledger/requests/    # Requests and review status
+└── approval-worktrees/          # Temporary isolated approval worktrees
 ```
 
 ## License

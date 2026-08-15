@@ -23,6 +23,7 @@
 | **电脑手机体验一致** | 手机端和电脑端 Claude Code 行为完全相同——同样的编排逻辑、同样的输出效果。不是两个割裂的 AI。 |
 | **文件双向收发** | 发图片、Word、PDF 给 Claude 分析；Claude 生成的文件也会直接推送到微信，不用回到电脑前查看。 |
 | **超时安抚** | 任务超过 5 分钟没响应？它会自动发一条消息告诉你还在干，不会让你对着空白聊天框干等。 |
+| **多实例与 Git 审批** | 一份项目可绑定多个微信账号；普通实例只读并提交请求，唯一管理员审批后才执行修改。 |
 
 ## 快速安装
 
@@ -73,6 +74,58 @@ npm run daemon -- restart  # 重启服务（更新代码后使用）
 npm run daemon -- logs     # 查看日志
 ```
 
+Windows 原生后台管理使用 PowerShell：
+
+```powershell
+npm run daemon:windows -- start -Instance default
+npm run daemon:windows -- status -Instance default
+```
+
+## 多微信账号与 Git 审批
+
+每个命名实例拥有独立的微信凭据、配置、session、同步游标和日志。同一份项目源码可以同时运行多个实例。
+实例名必须以字母或数字开头，只能包含字母、数字、点、下划线和连字符，最长 64 位。
+
+```bash
+# 第一个实例设为唯一管理员
+npm run setup -- --instance admin --role admin
+
+# 其它微信号设为普通请求实例（每条命令分别扫码）
+npm run setup -- --instance writer-a --role requester
+npm run setup -- --instance writer-b --role requester
+
+# macOS / Linux
+npm run daemon -- start --instance admin
+npm run daemon -- start --instance writer-a
+npm run daemon -- start --instance writer-b
+```
+
+Windows：
+
+```powershell
+npm run daemon:windows -- start -Instance admin
+npm run daemon:windows -- start -Instance writer-a
+npm run daemon:windows -- start -Instance writer-b
+```
+
+查看已配置实例：
+
+```bash
+npm run instances
+```
+
+权限规则：
+
+- 系统只允许配置一个 `admin` 实例。
+- `requester` 的 Claude 使用 `plan` 权限模式和 `Read,Grep,Glob` 工具，禁用写文件、Shell、hooks、MCP 与插件。
+- 普通实例通过 `/request <修改需求>` 将请求写入本地 Git 审批账本。
+- 管理员通过 `/requests` 查看，通过 `/approve <请求号>` 或 `/reject <请求号>` 处理。
+- 审批执行因重启或崩溃中断时，管理员用 `/recover <请求号>` 将残留修改提交到提案分支并收口。
+- 批准时会从目标仓库创建 `wcc/request/<请求号>` 分支和隔离 worktree。Claude 完成后自动提交；目标分支未变化时自动快进合并。
+- 管理员直接执行的修改也会自动提交。目标目录不是 Git 仓库或已有未提交改动时，任务自动降级为只读。
+
+> 这是应用级权限边界。所有实例若以同一个操作系统用户运行，该用户仍可在程序外修改配置或文件。需要抵抗恶意进程时，应再使用独立 Windows 用户、容器或虚拟机隔离。
+
 ## 微信端命令
 
 直接在微信聊天中发送即可：
@@ -91,6 +144,11 @@ npm run daemon -- logs     # 查看日志
 | `/compact` | 压缩上下文，开始新 CLI 会话 |
 | `/reset` | 完全重置（包括工作目录等设置） |
 | `/undo [数量]` | 撤销最近几条对话 |
+| `/request <需求>` | 提交 Git 修改请求 |
+| `/requests [all]` | 查看修改请求（仅管理员） |
+| `/approve <请求号>` | 批准、执行并提交修改（仅管理员） |
+| `/reject <请求号> [原因]` | 拒绝修改请求（仅管理员） |
+| `/recover <请求号>` | 保存并收口中断的审批（仅管理员） |
 | `/<skill> [参数]` | 触发任意已安装的 Skill |
 
 ## 工作原理
@@ -110,7 +168,7 @@ npm run daemon -- logs     # 查看日志
 ## 前置条件
 
 - Node.js >= 18
-- macOS 或 Linux
+- Windows、macOS 或 Linux（Windows 使用 `daemon:windows`）
 - 个人微信账号
 - 已安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI 并完成认证
 
@@ -122,10 +180,11 @@ npm run daemon -- logs     # 查看日志
 
 ```
 ~/.wechat-claude-code/
-├── accounts/       # 微信账号凭证
-├── config.json     # 全局配置
-├── sessions/       # 会话数据
-└── logs/           # 运行日志（每日轮转，保留 30 天）
+├── accounts/                    # default 实例凭据（向后兼容）
+├── instances/<实例名>/          # 命名实例的凭据、配置、session、游标和日志
+├── approval-ledger/.git/        # Git 审批账本
+├── approval-ledger/requests/    # 修改请求及状态
+└── approval-worktrees/          # 审批执行时的临时隔离 worktree
 ```
 
 ## License

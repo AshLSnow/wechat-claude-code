@@ -6,9 +6,41 @@ set -euo pipefail
 # Supports: macOS (launchd) / Linux (systemd + nohup fallback)
 # =============================================================================
 
-DATA_DIR="${HOME}/.wechat-claude-code"
+COMMAND="${1:-}"
+shift || true
+
+INSTANCE_ID="${WCC_INSTANCE:-default}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --instance)
+      INSTANCE_ID="${2:-}"
+      shift 2
+      ;;
+    --instance=*)
+      INSTANCE_ID="${1#--instance=}"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! "$INSTANCE_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$ ]]; then
+  echo "Invalid instance id: $INSTANCE_ID"
+  exit 1
+fi
+
+BASE_DATA_DIR="${WCC_DATA_DIR:-${HOME}/.wechat-claude-code}"
+if [ "$INSTANCE_ID" = "default" ]; then
+  DATA_DIR="$BASE_DATA_DIR"
+  SERVICE_NAME="wechat-claude-code"
+else
+  DATA_DIR="${BASE_DATA_DIR}/instances/${INSTANCE_ID}"
+  SERVICE_NAME="wechat-claude-code-${INSTANCE_ID}"
+fi
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SERVICE_NAME="wechat-claude-code"
 
 # Platform detection
 OS_TYPE="$(uname -s)"
@@ -18,7 +50,11 @@ OS_TYPE="$(uname -s)"
 # =============================================================================
 
 macos_plist_label() {
-  echo "com.wechat-claude-code.bridge"
+  if [ "$INSTANCE_ID" = "default" ]; then
+    echo "com.wechat-claude-code.bridge"
+  else
+    echo "com.wechat-claude-code.bridge.${INSTANCE_ID}"
+  fi
 }
 
 macos_plist_path() {
@@ -43,7 +79,7 @@ macos_start() {
 
   # Collect Anthropic/Claude env vars for plist
   local plist_extra_env=""
-  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY; do
+  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY WCC_DATA_DIR; do
     if [ -n "${!var:-}" ]; then
       plist_extra_env="${plist_extra_env}    <key>${var}</key>
     <string>${!var}</string>
@@ -63,6 +99,8 @@ macos_start() {
     <string>${node_bin}</string>
     <string>${PROJECT_DIR}/dist/main.js</string>
     <string>start</string>
+    <string>--instance</string>
+    <string>${INSTANCE_ID}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${PROJECT_DIR}</string>
@@ -84,7 +122,7 @@ ${plist_extra_env}  </dict>
 PLIST
 
   launchctl load "$plist_path"
-  echo "Started wechat-claude-code daemon (macOS launchd)"
+  echo "Started wechat-claude-code daemon (instance: ${INSTANCE_ID}, macOS launchd)"
 }
 
 macos_stop() {
@@ -98,7 +136,7 @@ macos_stop() {
 
 macos_status() {
   if macos_is_loaded; then
-    local pid=$(pgrep -f "dist/main.js start" 2>/dev/null | head -1)
+    local pid=$(pgrep -f "dist/main.js start --instance ${INSTANCE_ID}" 2>/dev/null | head -1)
     if [ -n "$pid" ]; then
       echo "Running (PID: $pid)"
     else
@@ -175,7 +213,7 @@ linux_create_service_file() {
 
   # Collect Anthropic/Claude env vars to pass through to the service
   local extra_env=""
-  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY; do
+  for var in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_API_KEY WCC_DATA_DIR; do
     if [ -n "${!var:-}" ]; then
       extra_env="${extra_env}Environment=${var}=${!var}
 "
@@ -190,7 +228,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${node_bin} ${PROJECT_DIR}/dist/main.js start
+ExecStart=${node_bin} ${PROJECT_DIR}/dist/main.js start --instance ${INSTANCE_ID}
 WorkingDirectory=${PROJECT_DIR}
 Restart=always
 RestartSec=10
@@ -229,6 +267,7 @@ linux_direct_start() {
 
   echo "Starting wechat-claude-code daemon (direct mode)..."
   nohup "$node_bin" "${PROJECT_DIR}/dist/main.js" start \
+    --instance "$INSTANCE_ID" \
     >> "$DATA_DIR/logs/stdout.log" \
     2>> "$DATA_DIR/logs/stderr.log" &
   local pid=$!
@@ -391,7 +430,7 @@ main() {
         status)  macos_status ;;
         logs)    macos_logs ;;
         *)
-          echo "Usage: daemon.sh {start|stop|restart|status|logs}"
+          echo "Usage: daemon.sh {start|stop|restart|status|logs} [--instance NAME]"
           echo "Platform: macOS (launchd)"
           exit 1
           ;;
@@ -405,7 +444,7 @@ main() {
         status)  linux_status ;;
         logs)    linux_logs ;;
         *)
-          echo "Usage: daemon.sh {start|stop|restart|status|logs}"
+          echo "Usage: daemon.sh {start|stop|restart|status|logs} [--instance NAME]"
           echo "Platform: Linux (systemd)"
           exit 1
           ;;
@@ -419,4 +458,4 @@ main() {
   esac
 }
 
-main "$@"
+main "$COMMAND"

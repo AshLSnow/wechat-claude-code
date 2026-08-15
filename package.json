@@ -11,7 +11,9 @@
     "dev": "tsc --watch",
     "test": "node --test dist/tests/*.test.js",
     "setup": "node dist/main.js setup",
+    "instances": "node dist/main.js instances",
     "daemon": "bash scripts/daemon.sh",
+    "daemon:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daemon.ps1",
     "visualize": "npx tsx src/tools/visualize-logs.ts"
   },
   "dependencies": {

@@ -11,10 +11,8 @@
 
 import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
-
-const DATA_DIR = process.env.WCC_DATA_DIR || join(homedir(), '.wechat-claude-code');
+import { DATA_DIR } from '../constants.js';
 
 // ─── Keepalive messages (must match main.ts SILENCE_MESSAGES) ───
 const SILENCE_MESSAGES = new Set([
