@@ -79,7 +79,13 @@ Windows 原生后台管理使用 PowerShell：
 ```powershell
 npm run daemon:windows -- start -Instance default
 npm run daemon:windows -- status -Instance default
+
+# 注册“当前用户登录时启动”的计划任务，并立即切换为受管运行
+npm run daemon:windows -- enable-startup -Instance default
+npm run daemon:windows -- startup-status -Instance default
 ```
+
+`enable-startup` 会固定当前项目路径、数据目录和 Node 路径。Windows 用户登录后自动启动；Node 进程异常退出时，常驻监督器会在一分钟后重启，任务计划程序也会在监督器自身失败时恢复。项目或 Node 路径改变后应重新运行一次该命令。用 `disable-startup` 删除计划任务（当前实例会继续以普通后台模式运行）。
 
 ## 多微信账号与 Git 审批
 
@@ -103,10 +109,15 @@ npm run daemon -- start --instance writer-b
 Windows：
 
 ```powershell
-npm run daemon:windows -- start -Instance admin
-npm run daemon:windows -- start -Instance writer-a
-npm run daemon:windows -- start -Instance writer-b
+npm run daemon:windows -- enable-startup -Instance admin
+npm run daemon:windows -- enable-startup -Instance writer-a
+npm run daemon:windows -- enable-startup -Instance writer-b
+
+npm run daemon:windows -- startup-status -Instance admin
+npm run daemon:windows -- status -Instance writer-a
 ```
+
+启用后，原有的 `start`、`stop`、`restart` 会自动通过对应计划任务管理实例。`stop` 只停止当前运行，实例仍会在下次登录时自动启动；需要永久取消时使用 `disable-startup`。
 
 查看已配置实例：
 

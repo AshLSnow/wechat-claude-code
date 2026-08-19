@@ -82,7 +82,13 @@ Native Windows background management uses PowerShell:
 ```powershell
 npm run daemon:windows -- start -Instance default
 npm run daemon:windows -- status -Instance default
+
+# Register an at-logon task and switch immediately to managed execution
+npm run daemon:windows -- enable-startup -Instance default
+npm run daemon:windows -- startup-status -Instance default
 ```
+
+`enable-startup` pins the current project, data-directory, and Node paths. The task starts after this Windows user logs on. A resident supervisor restarts the Node child one minute after an unexpected exit, while Task Scheduler also recovers the supervisor itself. Run it again after moving the project or Node installation. `disable-startup` removes the task while keeping the instance running in ordinary background mode.
 
 ## Multiple WeChat Accounts and Git Approval
 
@@ -103,10 +109,15 @@ npm run daemon -- start --instance writer-b
 On Windows:
 
 ```powershell
-npm run daemon:windows -- start -Instance admin
-npm run daemon:windows -- start -Instance writer-a
-npm run daemon:windows -- start -Instance writer-b
+npm run daemon:windows -- enable-startup -Instance admin
+npm run daemon:windows -- enable-startup -Instance writer-a
+npm run daemon:windows -- enable-startup -Instance writer-b
+
+npm run daemon:windows -- startup-status -Instance admin
+npm run daemon:windows -- status -Instance writer-a
 ```
+
+After autostart is enabled, `start`, `stop`, and `restart` automatically manage the corresponding scheduled task. `stop` only stops the current run, so the instance starts again at the next logon; use `disable-startup` to remove autostart permanently.
 
 List configured instances with `npm run instances`.
 

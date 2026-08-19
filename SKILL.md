@@ -127,7 +127,7 @@ cd ~/.claude/skills/wechat-claude-code && npm run daemon -- status
 | status | `npm run daemon -- status` | 查看运行状态 |
 | logs | `npm run daemon -- logs` | 查看最近日志（tail -100） |
 
-Windows 使用 `npm run daemon:windows -- <命令> -Instance <实例名>`。
+Windows 使用 `npm run daemon:windows -- <命令> -Instance <实例名>`。支持 `enable-startup` 注册当前用户登录自启动、`startup-status` 检查计划任务、`disable-startup` 删除自启动；启用后 `start/stop/restart` 会管理对应计划任务。
 
 ## 多实例与审批
 
@@ -144,6 +144,16 @@ npm run setup -- --instance worker-a --role requester
 npm run daemon -- start --instance admin
 npm run daemon -- status --instance worker-a
 ```
+
+Windows 推荐让每个实例注册独立的登录自启动任务：
+
+```powershell
+npm run daemon:windows -- enable-startup -Instance admin
+npm run daemon:windows -- enable-startup -Instance worker-a
+npm run daemon:windows -- startup-status -Instance admin
+```
+
+任务固定注册时的项目、数据目录和 Node 路径，在当前 Windows 用户登录后启动。常驻监督器会在 Node 异常退出一分钟后重启子进程，任务计划程序则负责恢复监督器自身。路径改变后重新运行 `enable-startup`。
 
 普通实例只能只读访问 Claude，并使用 `/request <需求>` 提交 Git 修改请求。唯一管理员实例使用 `/requests`、`/approve <请求号>`、`/reject <请求号>` 审批；中断的执行使用 `/recover <请求号>` 收口。目标仓库必须是干净的 Git 工作树。
 
