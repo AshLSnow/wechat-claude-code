@@ -1,7 +1,6 @@
 import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
 import { loadConfig, saveConfig } from '../config.js';
-import { DEFAULT_WORKING_DIR } from '../constants.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, basename, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -134,7 +133,7 @@ export function handleHistory(ctx: CommandContext, args: string): CommandResult 
 /** 完全重置会话（包括工作目录等设置） */
 export function handleReset(ctx: CommandContext): CommandResult {
   const newSession = ctx.clearSession();
-  newSession.workingDirectory = DEFAULT_WORKING_DIR;
+  newSession.workingDirectory = loadConfig().workingDirectory;
   Object.assign(ctx.session, newSession);
   return { reply: '✅ 会话已完全重置，所有设置恢复默认。', handled: true };
 }

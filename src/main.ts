@@ -18,8 +18,7 @@ import { TurnRouter } from './claude/turn-router.js';
 import { filterToolNoise } from './claude/tool-noise-filter.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
-import { DATA_DIR } from './constants.js';
-import { BASE_DATA_DIR } from './constants.js';
+import { BASE_DATA_DIR, DATA_DIR, DEFAULT_WORKING_DIR } from './constants.js';
 import { RUNTIME_OPTIONS } from './runtime.js';
 import { hasAdminInstance, isCurrentInstanceConfigured, listInstances, loadCurrentInstance, saveCurrentInstance, type InstanceConfig } from './instances.js';
 import { GitApprovalStore, type AdminAuditContext } from './governance/approval-store.js';
@@ -273,11 +272,14 @@ async function runDaemon(): Promise<void> {
 
   const api = new WeChatApi(account.botToken, account.baseUrl);
   const approvalStore = new GitApprovalStore(BASE_DATA_DIR);
-  const sessionStore = createSessionStore();
+  const sessionStore = createSessionStore(config.workingDirectory);
   const session: Session = sessionStore.load(account.accountId);
 
-  // Fix: backfill session workingDirectory from config if it's still the default process.cwd()
-  if (config.workingDirectory && session.workingDirectory === process.cwd()) {
+  // Migrate sessions created before per-instance config became the initial session directory.
+  if (
+    config.workingDirectory
+    && (session.workingDirectory === process.cwd() || session.workingDirectory === DEFAULT_WORKING_DIR)
+  ) {
     session.workingDirectory = config.workingDirectory;
     sessionStore.save(account.accountId, session);
   }

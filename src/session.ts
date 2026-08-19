@@ -4,8 +4,6 @@ import { DATA_DIR, DEFAULT_WORKING_DIR } from './constants.js';
 import { join } from 'node:path';
 import { logger } from './logger.js';
 
-const SESSIONS_DIR = join(DATA_DIR, 'sessions');
-
 export type SessionState = 'idle' | 'processing';
 
 export interface ChatMessage {
@@ -26,16 +24,21 @@ export interface Session {
 
 const DEFAULT_MAX_HISTORY = 100;
 
-export function createSessionStore() {
+export function createSessionStore(
+  initialWorkingDirectory = DEFAULT_WORKING_DIR,
+  dataDirectory = DATA_DIR,
+) {
+  const sessionsDir = join(dataDirectory, 'sessions');
+
   function getSessionPath(accountId: string): string {
     validateAccountId(accountId);
-    return join(SESSIONS_DIR, `${accountId}.json`);
+    return join(sessionsDir, `${accountId}.json`);
   }
 
   function load(accountId: string): Session {
     validateAccountId(accountId);
     const session = loadJson<Session>(getSessionPath(accountId), {
-      workingDirectory: DEFAULT_WORKING_DIR,
+      workingDirectory: initialWorkingDirectory,
       state: 'idle',
       chatHistory: [],
       maxHistoryLength: DEFAULT_MAX_HISTORY,
@@ -53,7 +56,7 @@ export function createSessionStore() {
   }
 
   function save(accountId: string, session: Session): void {
-    mkdirSync(SESSIONS_DIR, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
 
     // Trim chat history if it exceeds max length before saving
     const maxLen = session.maxHistoryLength || DEFAULT_MAX_HISTORY;
@@ -68,7 +71,7 @@ export function createSessionStore() {
     const session: Session = {
       sdkSessionId: undefined,          // explicitly clear so Object.assign removes it
       previousSdkSessionId: undefined,
-      workingDirectory: currentSession?.workingDirectory ?? DEFAULT_WORKING_DIR,
+      workingDirectory: currentSession?.workingDirectory ?? initialWorkingDirectory,
       model: currentSession?.model,
       state: 'idle',
       chatHistory: [],
