@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { delimiter, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { logger } from '../logger.js';
@@ -41,6 +41,29 @@ export interface QueryResult {
 // ---------------------------------------------------------------------------
 
 const TEMP_DIR = join(tmpdir(), 'wechat-claude-code');
+
+export function resolveClaudeExecutable(
+  environment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const override = environment.WCC_CLAUDE_PATH?.trim();
+  if (override) return resolve(override);
+  if (platform !== 'win32') return 'claude';
+
+  const pathValue = environment.PATH ?? environment.Path ?? '';
+  for (const rawDirectory of pathValue.split(delimiter)) {
+    const directory = rawDirectory.trim().replace(/^"|"$/g, '');
+    if (!directory) continue;
+    const candidates = [
+      join(directory, 'claude.exe'),
+      join(directory, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+    ];
+    const executable = candidates.find((candidate) => existsSync(candidate));
+    if (executable) return executable;
+  }
+
+  return 'claude.exe';
+}
 
 function saveImageTemp(images: NonNullable<QueryOptions['images']>): string[] {
   mkdirSync(TEMP_DIR, { recursive: true });
@@ -201,11 +224,13 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     permission = 'admin',
   } = options;
 
+  const claudeExecutable = resolveClaudeExecutable();
   logger.info("Starting Claude CLI query", {
     cwd,
     model,
     resume: !!resume,
     hasImages: !!images?.length,
+    executable: claudeExecutable,
   });
 
   // Build CLI arguments
@@ -234,7 +259,7 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
     };
 
     try {
-      child = spawn('claude', args, {
+      child = spawn(claudeExecutable, args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },

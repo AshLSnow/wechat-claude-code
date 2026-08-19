@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildClaudeArgs, handleStreamLine, type StreamParserState } from '../claude/provider.js';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import {
+  buildClaudeArgs,
+  handleStreamLine,
+  resolveClaudeExecutable,
+  type StreamParserState,
+} from '../claude/provider.js';
 
 function freshState(): StreamParserState {
   return { sessionId: '', textParts: [], trackingSkill: false, skillInputAccum: '' };
@@ -122,4 +130,23 @@ test('buildClaudeArgs: requester instance is restricted to read tools and plan m
     '--tools',
     'Read,Grep,Glob',
   ]);
+});
+
+test('resolveClaudeExecutable finds the native executable behind the Windows npm shim', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wcc-claude-bin-'));
+  try {
+    const executable = join(root, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+    mkdirSync(resolve(executable, '..'), { recursive: true });
+    writeFileSync(executable, '');
+    assert.equal(resolveClaudeExecutable({ PATH: root }, 'win32'), executable);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveClaudeExecutable honors an explicit executable path', () => {
+  assert.equal(
+    resolveClaudeExecutable({ WCC_CLAUDE_PATH: './custom-claude.exe' }, 'win32'),
+    resolve('./custom-claude.exe'),
+  );
 });
